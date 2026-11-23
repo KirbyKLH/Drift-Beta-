@@ -50,7 +50,7 @@ from PySide6.QtCore import QFileInfo, QMimeData, QObject, QPointF, QRectF, QSize
 from PySide6.QtGui import (QBrush, QColor, QCursor, QDrag, QFont, QFontMetrics, QIcon,
                            QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QPolygonF,
                            QRadialGradient)
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QColorDialog, QFileIconProvider,
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QColorDialog, QComboBox, QFileIconProvider,
                                QInputDialog, QLabel, QListView, QListWidget, QListWidgetItem,
                                QMenu, QPushButton, QSlider, QSystemTrayIcon, QWidget)
 
@@ -61,6 +61,7 @@ CORNER = 10          # Radius der geschwungenen Übergänge am Bildschirmrand (C
 CONFIG_DIR = os.path.join(os.environ.get("APPDATA", "."), "MeineNotch")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 DEFAULT_CONFIG = {
+    "language": "de",
     "hidden_apps": [],
     "peek_on_change": True,
     "idle": "time",            # time | face | none
@@ -1243,6 +1244,9 @@ class Swatch(QPushButton):
         p.drawEllipse(r)
 
 
+LANGUAGE_TEXT = {'en': {'Allgemein': 'General', 'Aussehen': 'Appearance', 'Maskottchen': 'Mascot', 'Musik': 'Music', 'Seiten': 'Pages', 'HUD & Töne': 'HUD & Sounds', 'Wasser': 'Water', 'Apps': 'Apps', 'Fertig': 'Done', 'Beenden': 'Quit', 'Sprache': 'Language', 'Mit Windows starten': 'Start with Windows', 'Größe (Neustart nötig)': 'Size (restart required)', 'Notch öffnen': 'Open Notch', 'Animationen': 'Animations', 'Wenn nichts läuft': 'When idle', 'Ring neben der Uhr': 'Ring next to clock', 'Datum neben der Uhr anzeigen': 'Show date next to clock', 'Minimale Notch (kleiner, wenn nichts läuft)': 'Minimal Notch (smaller when idle)', 'Im Vollbild ausblenden (Spiele, Videos, Folien)': 'Hide in fullscreen (games, videos, slides)', 'Monitor': 'Monitor', 'Uhrzeit': 'Clock', 'Gesicht': 'Face', 'Sekunden': 'Seconds', 'Aufgaben': 'Tasks', 'Klassisch (am Rand)': 'Classic (at edge)', 'Schwebend (Pille)': 'Floating (pill)', 'Notch-Stil': 'Notch style', 'Glas (leicht durchscheinend)': 'Glass (slightly translucent)', 'Körperfarbe': 'Body color', 'Augenform': 'Eye shape', 'Augenfarbe': 'Eye color', 'Augengröße': 'Eye size', 'Augenabstand': 'Eye spacing', 'Blinzeln': 'Blink', 'Folgt der Maus': 'Follow mouse', 'Leuchtende Augen': 'Glowing eyes', 'Wangen': 'Blush', 'Lächeln': 'Smile', 'Als Anzeige für den Leerlauf verwenden': 'Use as idle display', 'Songtext in der eingeklappten Notch': 'Lyrics in collapsed Notch', 'Bei Songwechsel kurz aufklappen': 'Briefly expand when song changes', 'Songtext früher anzeigen': 'Show lyrics earlier', 'Diese Seiten zeigt die Notch': 'Pages shown in Notch', 'Shelf & Zwischenablage': 'Shelf & clipboard', 'Heute (Woche & Aufgaben)': 'Today (week & tasks)', 'Anzeigen in der Notch': 'Indicators in Notch', 'Lautstärke': 'Volume', 'Eingabesprache': 'Input language', 'Erinnerungstöne (Pomodoro und Wasser)': 'Reminder sounds (Pomodoro and water)', 'Dauer': 'Duration', 'Fokus': 'Focus', 'Kurze Pause': 'Short break', 'Lange Pause': 'Long break', 'Tagesziel': 'Daily goal', 'Flaschengröße': 'Bottle size', 'Aktiv ab': 'Active from', 'Aktiv bis': 'Active until', 'Heutigen Fortschritt zurücksetzen': "Reset today's progress", 'In diesen Apps ausblenden': 'Hide in these apps', 'Liste aktualisieren': 'Refresh list', 'Alles löschen': 'Clear all', 'Heute': 'Today', '+ Aufgabe': '+ Task', 'Erledigte löschen': 'Delete completed', 'Zeit zu trinken': 'Time to drink'}, 'es': {'Allgemein': 'General', 'Aussehen': 'Apariencia', 'Maskottchen': 'Mascota', 'Musik': 'Música', 'Seiten': 'Páginas', 'HUD & Töne': 'HUD y sonidos', 'Wasser': 'Agua', 'Apps': 'Aplicaciones', 'Fertig': 'Listo', 'Beenden': 'Salir', 'Sprache': 'Idioma', 'Mit Windows starten': 'Iniciar con Windows', 'Größe (Neustart nötig)': 'Tamaño (requiere reinicio)', 'Notch öffnen': 'Abrir Notch', 'Animationen': 'Animaciones', 'Wenn nichts läuft': 'En reposo', 'Ring neben der Uhr': 'Anillo junto al reloj', 'Datum neben der Uhr anzeigen': 'Mostrar fecha junto al reloj', 'Minimale Notch (kleiner, wenn nichts läuft)': 'Notch mínima (más pequeña en reposo)', 'Im Vollbild ausblenden (Spiele, Videos, Folien)': 'Ocultar en pantalla completa', 'Monitor': 'Monitor', 'Uhrzeit': 'Hora', 'Gesicht': 'Cara', 'Sekunden': 'Segundos', 'Aufgaben': 'Tareas', 'Klassisch (am Rand)': 'Clásico (en el borde)', 'Schwebend (Pille)': 'Flotante (píldora)', 'Notch-Stil': 'Estilo de Notch', 'Glas (leicht durchscheinend)': 'Cristal translúcido', 'Körperfarbe': 'Color del cuerpo', 'Augenform': 'Forma de ojos', 'Augenfarbe': 'Color de ojos', 'Augengröße': 'Tamaño de ojos', 'Augenabstand': 'Separación de ojos', 'Blinzeln': 'Parpadear', 'Folgt der Maus': 'Seguir el ratón', 'Leuchtende Augen': 'Ojos brillantes', 'Wangen': 'Mejillas', 'Lächeln': 'Sonrisa', 'Als Anzeige für den Leerlauf verwenden': 'Usar como pantalla en reposo', 'Songtext in der eingeklappten Notch': 'Letra en Notch plegada', 'Bei Songwechsel kurz aufklappen': 'Expandir al cambiar de canción', 'Songtext früher anzeigen': 'Mostrar letra antes', 'Diese Seiten zeigt die Notch': 'Páginas que muestra Notch', 'Shelf & Zwischenablage': 'Estante y portapapeles', 'Heute (Woche & Aufgaben)': 'Hoy (semana y tareas)', 'Anzeigen in der Notch': 'Indicadores en Notch', 'Lautstärke': 'Volumen', 'Eingabesprache': 'Idioma de entrada', 'Erinnerungstöne (Pomodoro und Wasser)': 'Sonidos de recordatorio', 'Dauer': 'Duración', 'Fokus': 'Concentración', 'Kurze Pause': 'Pausa corta', 'Lange Pause': 'Pausa larga', 'Tagesziel': 'Objetivo diario', 'Flaschengröße': 'Tamaño de botella', 'Aktiv ab': 'Activo desde', 'Aktiv bis': 'Activo hasta', 'Heutigen Fortschritt zurücksetzen': 'Restablecer progreso de hoy', 'In diesen Apps ausblenden': 'Ocultar en estas aplicaciones', 'Liste aktualisieren': 'Actualizar lista', 'Alles löschen': 'Borrar todo', 'Heute': 'Hoy', '+ Aufgabe': '+ Tarea', 'Erledigte löschen': 'Eliminar completadas', 'Zeit zu trinken': 'Hora de beber'}, 'fr': {'Allgemein': 'Général', 'Aussehen': 'Apparence', 'Maskottchen': 'Mascotte', 'Musik': 'Musique', 'Seiten': 'Pages', 'HUD & Töne': 'HUD et sons', 'Wasser': 'Eau', 'Apps': 'Applications', 'Fertig': 'Terminé', 'Beenden': 'Quitter', 'Sprache': 'Langue', 'Mit Windows starten': 'Démarrer avec Windows', 'Größe (Neustart nötig)': 'Taille (redémarrage requis)', 'Notch öffnen': 'Ouvrir la Notch', 'Animationen': 'Animations', 'Wenn nichts läuft': 'Au repos', 'Ring neben der Uhr': "Anneau près de l'horloge", 'Datum neben der Uhr anzeigen': "Afficher la date près de l'horloge", 'Minimale Notch (kleiner, wenn nichts läuft)': 'Notch minimale (plus petite au repos)', 'Im Vollbild ausblenden (Spiele, Videos, Folien)': 'Masquer en plein écran', 'Monitor': 'Écran', 'Uhrzeit': 'Heure', 'Gesicht': 'Visage', 'Sekunden': 'Secondes', 'Aufgaben': 'Tâches', 'Klassisch (am Rand)': 'Classique (au bord)', 'Schwebend (Pille)': 'Flottante (pilule)', 'Notch-Stil': 'Style de Notch', 'Glas (leicht durchscheinend)': 'Verre translucide', 'Körperfarbe': 'Couleur du corps', 'Augenform': 'Forme des yeux', 'Augenfarbe': 'Couleur des yeux', 'Augengröße': 'Taille des yeux', 'Augenabstand': 'Écart des yeux', 'Blinzeln': 'Cligner des yeux', 'Folgt der Maus': 'Suit la souris', 'Leuchtende Augen': 'Yeux lumineux', 'Wangen': 'Joues', 'Lächeln': 'Sourire', 'Als Anzeige für den Leerlauf verwenden': 'Utiliser comme affichage au repos', 'Songtext in der eingeklappten Notch': 'Paroles dans la Notch repliée', 'Bei Songwechsel kurz aufklappen': 'Déployer au changement de chanson', 'Songtext früher anzeigen': 'Afficher les paroles plus tôt', 'Diese Seiten zeigt die Notch': 'Pages affichées dans la Notch', 'Shelf & Zwischenablage': 'Étagère et presse-papiers', 'Heute (Woche & Aufgaben)': "Aujourd'hui (semaine et tâches)", 'Anzeigen in der Notch': 'Indicateurs dans la Notch', 'Lautstärke': 'Volume', 'Eingabesprache': 'Langue de saisie', 'Erinnerungstöne (Pomodoro und Wasser)': 'Sons de rappel', 'Dauer': 'Durée', 'Fokus': 'Concentration', 'Kurze Pause': 'Pause courte', 'Lange Pause': 'Pause longue', 'Tagesziel': 'Objectif quotidien', 'Flaschengröße': 'Taille de la bouteille', 'Aktiv ab': 'Actif à partir de', 'Aktiv bis': "Actif jusqu'à", 'Heutigen Fortschritt zurücksetzen': 'Réinitialiser la progression du jour', 'In diesen Apps ausblenden': 'Masquer dans ces applications', 'Liste aktualisieren': 'Actualiser la liste', 'Alles löschen': 'Tout effacer', 'Heute': "Aujourd'hui", '+ Aufgabe': '+ Tâche', 'Erledigte löschen': 'Supprimer les tâches terminées', 'Zeit zu trinken': 'Il est temps de boire'}}
+
+
 class Pane:
     """Baut Zeilen (Schalter, Auswahl, Zähler, Farben) in einen Einstellungs-Bereich."""
     X0 = 186
@@ -1254,6 +1258,18 @@ class Pane:
     def refresh(self):
         for f in self.refreshers:
             f()
+
+    def language_selector(self):
+        make_label(self.w, 0, self.y, 180, 28, self.n.tr("Sprache"), size=10)
+        combo = QComboBox(self.w)
+        combo.setGeometry(self.X0, self.y, 190, 28)
+        for label, code in (("Deutsch", "de"), ("English", "en"), ("Español", "es"), ("Français", "fr")):
+            combo.addItem(label, code)
+        combo.setCurrentIndex(max(0, combo.findData(self.n.cfg.get("language", "de"))))
+        combo.setStyleSheet("QComboBox{background:rgba(255,255,255,0.10);color:white;border:0;border-radius:7px;padding:4px 8px;} QComboBox QAbstractItemView{background:#252936;color:white;}")
+        combo.currentIndexChanged.connect(lambda _=0: self.n.set_language(combo.currentData()))
+        self.y += 36
+        self.language_combo = combo
 
     def title(self, text):
         make_label(self.w, 0, self.y, 480, 20, text, size=10, bold=True, color="#c8ccd8")
@@ -1613,6 +1629,7 @@ class Notch(QWidget):
         self._build_today()
         self._build_pomo()
         self._build_water()
+        self._translate_ui()
         self.nav_prev = make_button(self.container, 0, 0, 22, 26, radius=11, icon="chev_l")
         self.nav_next = make_button(self.container, 0, 0, 22, 26, radius=11, icon="chev_r")
         self.nav_prev.clicked.connect(lambda: self._nav(-1))
@@ -2510,6 +2527,42 @@ class Notch(QWidget):
             self.click_open = True
         super().mousePressEvent(e)
 
+    def tr(self, text):
+        return LANGUAGE_TEXT.get(self.cfg.get("language", "de"), {}).get(text, text)
+
+    def set_language(self, lang):
+        if lang not in ("de", "en", "es", "fr"):
+            return
+        self.cfg["language"] = lang
+        save_config(self.cfg)
+        self._translate_ui()
+
+    def _translate_ui(self):
+        # Refresh changing page content first, then translate the resulting widgets.
+        for refresh_name in ("_refresh_tasks", "_refresh_shelf", "_refresh_pomo", "_refresh_water"):
+            refresh = getattr(self, refresh_name, None)
+            if callable(refresh):
+                try:
+                    refresh()
+                except Exception:
+                    pass
+        mapping = LANGUAGE_TEXT.get(self.cfg.get("language", "de"), {})
+        for widget in self.findChildren(QWidget):
+            if isinstance(widget, (QLabel, QPushButton, QCheckBox)):
+                original = widget.property("_notch_original_text")
+                if original is None:
+                    original = widget.text()
+                    widget.setProperty("_notch_original_text", original)
+                widget.setText(mapping.get(str(original), str(original)))
+        if hasattr(self, "cat_list"):
+            for i in range(self.cat_list.count()):
+                item = self.cat_list.item(i)
+                original = item.data(Qt.UserRole)
+                if original is None:
+                    original = item.text()
+                    item.setData(Qt.UserRole, original)
+                item.setText(mapping.get(str(original), str(original)))
+
     def _fill_panes(self):
         P = [Pane(self, w) for w in self.panes]
         self.pane_helpers = P
@@ -2517,6 +2570,7 @@ class Notch(QWidget):
 
         # 0 Allgemein
         p = P[0]
+        p.language_selector()
         p.toggle(("autostart",), "Mit Windows starten", getter=autostart_enabled)
         p.segmented(("size",), "Größe (Neustart nötig)",
                     (("auto", "Auto"), ("100", "100 %"), ("115", "115 %"), ("130", "130 %"), ("150", "150 %")),
@@ -2646,7 +2700,7 @@ class Notch(QWidget):
     def _refresh_pomo(self):
         pm = self.pomo
         sessions, minutes = focus_stats(self.cfg)
-        self.po_mode.setText(POMO_NAMES[pm.mode])
+        self.po_mode.setText(self.tr(POMO_NAMES[pm.mode]))
         self.po_time.setText(fmt_time(pm.remaining()))
         self.po_info.setText("Heute: %d Runde%s · %d min Fokus" % (sessions, "" if sessions == 1 else "n", minutes))
         self.po_ring.value = pm.progress()
@@ -2689,13 +2743,13 @@ class Notch(QWidget):
 
     def _water_remind(self):
         play_sound(self.cfg)
-        self.show_hud("droplet", "Zeit zu trinken", None, 4.0)
+        self.show_hud("droplet", self.tr("Zeit zu trinken"), None, 4.0)
 
     def hud_active(self):
         return self.hud is not None and time.time() < self.hud["until"]
 
     def show_hud(self, icon, text, value=None, secs=1.8):
-        self.hud = dict(icon=icon, text=text, value=value, until=time.time() + secs)
+        self.hud = dict(icon=icon, text=self.tr(text), value=value, until=time.time() + secs)
         if self.csize.go(*self._coll_target()):
             self._kick()
         self.update()
