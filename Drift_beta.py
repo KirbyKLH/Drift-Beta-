@@ -1,6 +1,13 @@
 """
-Meine Notch v6 - Notch für Windows (Musik, Songtexte, Shelf, Zwischenablage, Aufgaben,
+Wisp - Notch für Windows (Musik, Songtexte, Shelf, Zwischenablage, Aufgaben,
 Pomodoro, Wasser, Maskottchen)
+
+Neu in dieser Version:
+  - Name Wisp und neues Logo (auch im Tray-Symbol)
+  - Unterer Verlauf der geöffneten Notch folgt der Farbe des Maskottchens (im Gesichts-Modus)
+  - Mausrad wechselt zwischen den Seiten (abschaltbar)
+  - Fehlerprotokoll (Tray-Menü) und Hinweis, falls die Lautstärke-Erkennung fehlt;
+    ohne pycaw reagiert die Anzeige wenigstens auf die Lautstärke-Tasten
 
 Neu in v6:
   - Maskottchen-Editor (Farbe, Augenform, Augenfarbe, Größe, Wangen, Lächeln ...)
@@ -19,8 +26,8 @@ Einmalig installieren (Eingabeaufforderung):
   pip install PySide6 psutil pycaw winrt-runtime winrt-Windows.Media winrt-Windows.Media.Control winrt-Windows.Storage.Streams winrt-Windows.Foundation winrt-Windows.Foundation.Collections
 
 Starten:
-  python notch_v6.py        (mit Konsole, zum Fehler suchen)
-  pythonw notch_v6.py       (ohne Konsole, nur im Hintergrund)
+  python wisp.py        (mit Konsole, zum Fehler suchen)
+  pythonw wisp.py       (ohne Konsole, nur im Hintergrund)
 
 Bedienung:
   - Maus auf die Notch: sie klappt auf
@@ -30,6 +37,7 @@ Bedienung:
   - Tray-Icon unten rechts: Einstellungen / Beenden
 """
 import asyncio
+import base64
 import bisect
 import ctypes
 import datetime
@@ -41,6 +49,7 @@ import re
 import sys
 import threading
 import time
+import traceback
 import urllib.parse
 import urllib.request
 from ctypes import wintypes
@@ -50,7 +59,7 @@ from PySide6.QtCore import QFileInfo, QMimeData, QObject, QPointF, QRectF, QSize
 from PySide6.QtGui import (QBrush, QColor, QCursor, QDrag, QFont, QFontMetrics, QIcon,
                            QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QPolygonF,
                            QRadialGradient)
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QColorDialog, QComboBox, QFileIconProvider,
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QColorDialog, QFileIconProvider,
                                QInputDialog, QLabel, QListView, QListWidget, QListWidgetItem,
                                QMenu, QPushButton, QSlider, QSystemTrayIcon, QWidget)
 
@@ -58,10 +67,11 @@ PAGE_PLAYER, PAGE_LYRICS, PAGE_SETTINGS, PAGE_SHELF, PAGE_TODAY, PAGE_POMO, PAGE
 PAGES = [(520, 206), (520, 206), (700, 440), (600, 240), (620, 262), (600, 240), (600, 240)]
 CORNER = 10          # Radius der geschwungenen Übergänge am Bildschirmrand (Classic)
 
-CONFIG_DIR = os.path.join(os.environ.get("APPDATA", "."), "MeineNotch")
+CONFIG_DIR = os.path.join(os.environ.get("APPDATA", "."), "Wisp")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+OLD_CONFIG_FILE = os.path.join(os.environ.get("APPDATA", "."), "MeineNotch", "config.json")
+LOG_FILE = os.path.join(CONFIG_DIR, "error.log")
 DEFAULT_CONFIG = {
-    "language": "de",
     "hidden_apps": [],
     "peek_on_change": True,
     "idle": "time",            # time | face | none
@@ -93,6 +103,7 @@ DEFAULT_CONFIG = {
                "mouth": False},
     "clip_limit": 30,
     "shelf_empty_start": False,
+    "wheel_nav": True,
     "stats": {"date": "", "sessions": 0, "focus_min": 0},
 }
 
@@ -147,7 +158,8 @@ def fmt_size(n):
 def load_config():
     cfg = json.loads(json.dumps(DEFAULT_CONFIG))
     try:
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+        path = CONFIG_FILE if os.path.exists(CONFIG_FILE) else OLD_CONFIG_FILE
+        with open(path, "r", encoding="utf-8") as f:
             cfg.update(json.load(f))
     except Exception:
         pass
@@ -159,6 +171,41 @@ def save_config(cfg):
         os.makedirs(CONFIG_DIR, exist_ok=True)
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------- Fehlerprotokoll
+def log_line(text):
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write("[%s] %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), text))
+    except Exception:
+        pass
+
+
+def install_crash_log():
+    """Schreibt unbehandelte Fehler in die Datei error.log (auch ohne Konsolenfenster)."""
+    def hook(exc_type, exc, tb):
+        log_line("".join(traceback.format_exception(exc_type, exc, tb)).rstrip())
+        try:
+            sys.__excepthook__(exc_type, exc, tb)
+        except Exception:
+            pass
+    sys.excepthook = hook
+    try:
+        threading.excepthook = lambda a: hook(a.exc_type, a.exc_value, a.exc_traceback)
+    except Exception:
+        pass
+
+
+def open_log():
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        if not os.path.exists(LOG_FILE):
+            open(LOG_FILE, "a", encoding="utf-8").close()
+        os.startfile(LOG_FILE)
     except Exception:
         pass
 
@@ -203,40 +250,48 @@ def visible_apps():
     return names
 
 
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+
 def autostart_enabled():
     try:
         import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run") as k:
-            winreg.QueryValueEx(k, "MeineNotch")
-            return True
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
+            for name in ("Wisp", "MeineNotch"):
+                try:
+                    winreg.QueryValueEx(k, name)
+                    return True
+                except FileNotFoundError:
+                    pass
     except Exception:
-        return False
+        pass
+    return False
 
 
 def set_autostart(on):
     try:
         import winreg
-        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE) as k:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
+            for name in ("Wisp", "MeineNotch"):
+                try:
+                    winreg.DeleteValue(k, name)
+                except FileNotFoundError:
+                    pass
             if on:
                 exe = sys.executable
                 pyw = exe.replace("python.exe", "pythonw.exe")
                 if os.path.exists(pyw):
                     exe = pyw
-                winreg.SetValueEx(k, "MeineNotch", 0, winreg.REG_SZ,
-                                  '"%s" "%s"' % (exe, os.path.abspath(__file__)))
-            else:
-                try:
-                    winreg.DeleteValue(k, "MeineNotch")
-                except FileNotFoundError:
-                    pass
-    except Exception:
-        pass
+                winreg.SetValueEx(k, "Wisp", 0, winreg.REG_SZ, '"%s" "%s"' % (exe, os.path.abspath(__file__)))
+    except Exception as e:
+        log_line("Autostart: " + repr(e))
 
 
 class Volume:
     def __init__(self):
         self.ep = None
+        self.error = ""
+        self._warned = False
         try:
             from pycaw.pycaw import AudioUtilities
             dev = AudioUtilities.GetSpeakers()
@@ -248,8 +303,10 @@ class Volume:
                 iface = dev.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
                 ep = cast(iface, POINTER(IAudioEndpointVolume))
             self.ep = ep
-        except Exception:
+        except Exception as e:
             self.ep = None
+            self.error = repr(e)
+            log_line("Lautstärke (pycaw) nicht verfügbar: " + self.error)
 
     def available(self):
         return self.ep is not None
@@ -257,7 +314,10 @@ class Volume:
     def get(self):
         try:
             return int(round(self.ep.GetMasterVolumeLevelScalar() * 100))
-        except Exception:
+        except Exception as e:
+            if not self._warned:
+                self._warned = True
+                log_line("Lautstärke lesen fehlgeschlagen: " + repr(e))
             return 50
 
     def set(self, v):
@@ -392,7 +452,7 @@ class Lyrics(QObject):
     @staticmethod
     def _search(params):
         url = "https://lrclib.net/api/search?" + urllib.parse.urlencode(params)
-        req = urllib.request.Request(url, headers={"User-Agent": "MeineNotch/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "Wisp/1.0"})
         with urllib.request.urlopen(req, timeout=8) as r:
             return json.loads(r.read().decode("utf-8"))
 
@@ -648,7 +708,113 @@ def make_check(parent, x, y, w, text):
     return c
 
 
+LOGO_B64 = (
+    "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"
+    "uXnfzPj/oR/F/1L+2eQAAAAASUVORK5CYII="
+)
+
+
 def make_tray_icon():
+    pix = QPixmap()
+    try:
+        if pix.loadFromData(base64.b64decode("".join(LOGO_B64))):
+            return QIcon(pix)
+    except Exception:
+        pass
     pix = QPixmap(64, 64)
     pix.fill(Qt.transparent)
     p = QPainter(pix)
@@ -844,8 +1010,11 @@ class ShelfList(QListWidget):
 
     def wheelEvent(self, e):
         sb = self.horizontalScrollBar()
-        sb.setValue(sb.value() - e.angleDelta().y())
-        e.accept()
+        if sb.maximum() > sb.minimum():
+            sb.setValue(sb.value() - e.angleDelta().y())
+            e.accept()
+        else:
+            e.ignore()
 
 
 class LyricsView(QWidget):
@@ -945,7 +1114,7 @@ class Veil(QWidget):
 
 
 # ---------------------------------------------------------------- Neu in v6: Hilfen
-APP_NAME = "Meine Notch"        # <- hier den Namen ändern (Tray-Tooltip und Meldungen)
+APP_NAME = "Wisp"        # <- hier den Namen ändern (Tray-Tooltip und Meldungen)
 POMO_NAMES = {"focus": "Fokus", "short": "Kurze Pause", "long": "Lange Pause"}
 LANG_NAMES = {0x0407: "DE", 0x0409: "EN", 0x0809: "EN-GB", 0x040C: "FR", 0x040A: "ES", 0x0C0A: "ES",
               0x0410: "IT", 0x0419: "RU", 0x041F: "TR", 0x0415: "PL", 0x0411: "JA", 0x0412: "KO",
@@ -1244,9 +1413,6 @@ class Swatch(QPushButton):
         p.drawEllipse(r)
 
 
-LANGUAGE_TEXT = {'en': {'Allgemein': 'General', 'Aussehen': 'Appearance', 'Maskottchen': 'Mascot', 'Musik': 'Music', 'Seiten': 'Pages', 'HUD & Töne': 'HUD & Sounds', 'Wasser': 'Water', 'Apps': 'Apps', 'Fertig': 'Done', 'Beenden': 'Quit', 'Sprache': 'Language', 'Mit Windows starten': 'Start with Windows', 'Größe (Neustart nötig)': 'Size (restart required)', 'Notch öffnen': 'Open Notch', 'Animationen': 'Animations', 'Wenn nichts läuft': 'When idle', 'Ring neben der Uhr': 'Ring next to clock', 'Datum neben der Uhr anzeigen': 'Show date next to clock', 'Minimale Notch (kleiner, wenn nichts läuft)': 'Minimal Notch (smaller when idle)', 'Im Vollbild ausblenden (Spiele, Videos, Folien)': 'Hide in fullscreen (games, videos, slides)', 'Monitor': 'Monitor', 'Uhrzeit': 'Clock', 'Gesicht': 'Face', 'Sekunden': 'Seconds', 'Aufgaben': 'Tasks', 'Klassisch (am Rand)': 'Classic (at edge)', 'Schwebend (Pille)': 'Floating (pill)', 'Notch-Stil': 'Notch style', 'Glas (leicht durchscheinend)': 'Glass (slightly translucent)', 'Körperfarbe': 'Body color', 'Augenform': 'Eye shape', 'Augenfarbe': 'Eye color', 'Augengröße': 'Eye size', 'Augenabstand': 'Eye spacing', 'Blinzeln': 'Blink', 'Folgt der Maus': 'Follow mouse', 'Leuchtende Augen': 'Glowing eyes', 'Wangen': 'Blush', 'Lächeln': 'Smile', 'Als Anzeige für den Leerlauf verwenden': 'Use as idle display', 'Songtext in der eingeklappten Notch': 'Lyrics in collapsed Notch', 'Bei Songwechsel kurz aufklappen': 'Briefly expand when song changes', 'Songtext früher anzeigen': 'Show lyrics earlier', 'Diese Seiten zeigt die Notch': 'Pages shown in Notch', 'Shelf & Zwischenablage': 'Shelf & clipboard', 'Heute (Woche & Aufgaben)': 'Today (week & tasks)', 'Anzeigen in der Notch': 'Indicators in Notch', 'Lautstärke': 'Volume', 'Eingabesprache': 'Input language', 'Erinnerungstöne (Pomodoro und Wasser)': 'Reminder sounds (Pomodoro and water)', 'Dauer': 'Duration', 'Fokus': 'Focus', 'Kurze Pause': 'Short break', 'Lange Pause': 'Long break', 'Tagesziel': 'Daily goal', 'Flaschengröße': 'Bottle size', 'Aktiv ab': 'Active from', 'Aktiv bis': 'Active until', 'Heutigen Fortschritt zurücksetzen': "Reset today's progress", 'In diesen Apps ausblenden': 'Hide in these apps', 'Liste aktualisieren': 'Refresh list', 'Alles löschen': 'Clear all', 'Heute': 'Today', '+ Aufgabe': '+ Task', 'Erledigte löschen': 'Delete completed', 'Zeit zu trinken': 'Time to drink'}, 'es': {'Allgemein': 'General', 'Aussehen': 'Apariencia', 'Maskottchen': 'Mascota', 'Musik': 'Música', 'Seiten': 'Páginas', 'HUD & Töne': 'HUD y sonidos', 'Wasser': 'Agua', 'Apps': 'Aplicaciones', 'Fertig': 'Listo', 'Beenden': 'Salir', 'Sprache': 'Idioma', 'Mit Windows starten': 'Iniciar con Windows', 'Größe (Neustart nötig)': 'Tamaño (requiere reinicio)', 'Notch öffnen': 'Abrir Notch', 'Animationen': 'Animaciones', 'Wenn nichts läuft': 'En reposo', 'Ring neben der Uhr': 'Anillo junto al reloj', 'Datum neben der Uhr anzeigen': 'Mostrar fecha junto al reloj', 'Minimale Notch (kleiner, wenn nichts läuft)': 'Notch mínima (más pequeña en reposo)', 'Im Vollbild ausblenden (Spiele, Videos, Folien)': 'Ocultar en pantalla completa', 'Monitor': 'Monitor', 'Uhrzeit': 'Hora', 'Gesicht': 'Cara', 'Sekunden': 'Segundos', 'Aufgaben': 'Tareas', 'Klassisch (am Rand)': 'Clásico (en el borde)', 'Schwebend (Pille)': 'Flotante (píldora)', 'Notch-Stil': 'Estilo de Notch', 'Glas (leicht durchscheinend)': 'Cristal translúcido', 'Körperfarbe': 'Color del cuerpo', 'Augenform': 'Forma de ojos', 'Augenfarbe': 'Color de ojos', 'Augengröße': 'Tamaño de ojos', 'Augenabstand': 'Separación de ojos', 'Blinzeln': 'Parpadear', 'Folgt der Maus': 'Seguir el ratón', 'Leuchtende Augen': 'Ojos brillantes', 'Wangen': 'Mejillas', 'Lächeln': 'Sonrisa', 'Als Anzeige für den Leerlauf verwenden': 'Usar como pantalla en reposo', 'Songtext in der eingeklappten Notch': 'Letra en Notch plegada', 'Bei Songwechsel kurz aufklappen': 'Expandir al cambiar de canción', 'Songtext früher anzeigen': 'Mostrar letra antes', 'Diese Seiten zeigt die Notch': 'Páginas que muestra Notch', 'Shelf & Zwischenablage': 'Estante y portapapeles', 'Heute (Woche & Aufgaben)': 'Hoy (semana y tareas)', 'Anzeigen in der Notch': 'Indicadores en Notch', 'Lautstärke': 'Volumen', 'Eingabesprache': 'Idioma de entrada', 'Erinnerungstöne (Pomodoro und Wasser)': 'Sonidos de recordatorio', 'Dauer': 'Duración', 'Fokus': 'Concentración', 'Kurze Pause': 'Pausa corta', 'Lange Pause': 'Pausa larga', 'Tagesziel': 'Objetivo diario', 'Flaschengröße': 'Tamaño de botella', 'Aktiv ab': 'Activo desde', 'Aktiv bis': 'Activo hasta', 'Heutigen Fortschritt zurücksetzen': 'Restablecer progreso de hoy', 'In diesen Apps ausblenden': 'Ocultar en estas aplicaciones', 'Liste aktualisieren': 'Actualizar lista', 'Alles löschen': 'Borrar todo', 'Heute': 'Hoy', '+ Aufgabe': '+ Tarea', 'Erledigte löschen': 'Eliminar completadas', 'Zeit zu trinken': 'Hora de beber'}, 'fr': {'Allgemein': 'Général', 'Aussehen': 'Apparence', 'Maskottchen': 'Mascotte', 'Musik': 'Musique', 'Seiten': 'Pages', 'HUD & Töne': 'HUD et sons', 'Wasser': 'Eau', 'Apps': 'Applications', 'Fertig': 'Terminé', 'Beenden': 'Quitter', 'Sprache': 'Langue', 'Mit Windows starten': 'Démarrer avec Windows', 'Größe (Neustart nötig)': 'Taille (redémarrage requis)', 'Notch öffnen': 'Ouvrir la Notch', 'Animationen': 'Animations', 'Wenn nichts läuft': 'Au repos', 'Ring neben der Uhr': "Anneau près de l'horloge", 'Datum neben der Uhr anzeigen': "Afficher la date près de l'horloge", 'Minimale Notch (kleiner, wenn nichts läuft)': 'Notch minimale (plus petite au repos)', 'Im Vollbild ausblenden (Spiele, Videos, Folien)': 'Masquer en plein écran', 'Monitor': 'Écran', 'Uhrzeit': 'Heure', 'Gesicht': 'Visage', 'Sekunden': 'Secondes', 'Aufgaben': 'Tâches', 'Klassisch (am Rand)': 'Classique (au bord)', 'Schwebend (Pille)': 'Flottante (pilule)', 'Notch-Stil': 'Style de Notch', 'Glas (leicht durchscheinend)': 'Verre translucide', 'Körperfarbe': 'Couleur du corps', 'Augenform': 'Forme des yeux', 'Augenfarbe': 'Couleur des yeux', 'Augengröße': 'Taille des yeux', 'Augenabstand': 'Écart des yeux', 'Blinzeln': 'Cligner des yeux', 'Folgt der Maus': 'Suit la souris', 'Leuchtende Augen': 'Yeux lumineux', 'Wangen': 'Joues', 'Lächeln': 'Sourire', 'Als Anzeige für den Leerlauf verwenden': 'Utiliser comme affichage au repos', 'Songtext in der eingeklappten Notch': 'Paroles dans la Notch repliée', 'Bei Songwechsel kurz aufklappen': 'Déployer au changement de chanson', 'Songtext früher anzeigen': 'Afficher les paroles plus tôt', 'Diese Seiten zeigt die Notch': 'Pages affichées dans la Notch', 'Shelf & Zwischenablage': 'Étagère et presse-papiers', 'Heute (Woche & Aufgaben)': "Aujourd'hui (semaine et tâches)", 'Anzeigen in der Notch': 'Indicateurs dans la Notch', 'Lautstärke': 'Volume', 'Eingabesprache': 'Langue de saisie', 'Erinnerungstöne (Pomodoro und Wasser)': 'Sons de rappel', 'Dauer': 'Durée', 'Fokus': 'Concentration', 'Kurze Pause': 'Pause courte', 'Lange Pause': 'Pause longue', 'Tagesziel': 'Objectif quotidien', 'Flaschengröße': 'Taille de la bouteille', 'Aktiv ab': 'Actif à partir de', 'Aktiv bis': "Actif jusqu'à", 'Heutigen Fortschritt zurücksetzen': 'Réinitialiser la progression du jour', 'In diesen Apps ausblenden': 'Masquer dans ces applications', 'Liste aktualisieren': 'Actualiser la liste', 'Alles löschen': 'Tout effacer', 'Heute': "Aujourd'hui", '+ Aufgabe': '+ Tâche', 'Erledigte löschen': 'Supprimer les tâches terminées', 'Zeit zu trinken': 'Il est temps de boire'}}
-
-
 class Pane:
     """Baut Zeilen (Schalter, Auswahl, Zähler, Farben) in einen Einstellungs-Bereich."""
     X0 = 186
@@ -1258,18 +1424,6 @@ class Pane:
     def refresh(self):
         for f in self.refreshers:
             f()
-
-    def language_selector(self):
-        make_label(self.w, 0, self.y, 180, 28, self.n.tr("Sprache"), size=10)
-        combo = QComboBox(self.w)
-        combo.setGeometry(self.X0, self.y, 190, 28)
-        for label, code in (("Deutsch", "de"), ("English", "en"), ("Español", "es"), ("Français", "fr")):
-            combo.addItem(label, code)
-        combo.setCurrentIndex(max(0, combo.findData(self.n.cfg.get("language", "de"))))
-        combo.setStyleSheet("QComboBox{background:rgba(255,255,255,0.10);color:white;border:0;border-radius:7px;padding:4px 8px;} QComboBox QAbstractItemView{background:#252936;color:white;}")
-        combo.currentIndexChanged.connect(lambda _=0: self.n.set_language(combo.currentData()))
-        self.y += 36
-        self.language_combo = combo
 
     def title(self, text):
         make_label(self.w, 0, self.y, 480, 20, text, size=10, bold=True, color="#c8ccd8")
@@ -1567,6 +1721,13 @@ class Water:
             if self.next_at else ""
 
 
+class NoWheelSlider(QSlider):
+    """Schieberegler, der das Mausrad an die Notch weitergibt (zum Seitenwechsel)."""
+
+    def wheelEvent(self, e):
+        e.ignore()
+
+
 # ---------------------------------------------------------------- Die Notch
 class Notch(QWidget):
     def __init__(self, cfg, volume, lyrics):
@@ -1597,6 +1758,7 @@ class Notch(QWidget):
         self.cur_idx, self.cur_line = -1, ""
         self._pill_line, self._pill_prev, self._pill_t0 = "", "", 0.0
         self.click_open = False
+        self._wheel_t = 0.0
         self.hud = None
         self._hud_last = {"vol": None, "caps": None, "lang": None, "bat": None}
         self._low_warned = False
@@ -1629,7 +1791,6 @@ class Notch(QWidget):
         self._build_today()
         self._build_pomo()
         self._build_water()
-        self._translate_ui()
         self.nav_prev = make_button(self.container, 0, 0, 22, 26, radius=11, icon="chev_l")
         self.nav_next = make_button(self.container, 0, 0, 22, 26, radius=11, icon="chev_r")
         self.nav_prev.clicked.connect(lambda: self._nav(-1))
@@ -1701,7 +1862,7 @@ class Notch(QWidget):
         self.p_gear.clicked.connect(lambda: self._set_page(PAGE_SETTINGS))
 
         self.p_pos = make_label(pg, 28, 138, 48, 18, "0:00", size=8, color="#c8ccd8")
-        self.p_seek = QSlider(Qt.Horizontal, pg)
+        self.p_seek = NoWheelSlider(Qt.Horizontal, pg)
         self.p_seek.setGeometry(80, 140, 356, 14)
         self.p_seek.setRange(0, 1000)
         self.p_seek.setStyleSheet(SLIDER_STYLE)
@@ -2389,7 +2550,7 @@ class Notch(QWidget):
             p.setOpacity(opacity * t)
             g = QLinearGradient(0, 0, 0, h)
             g.setColorAt(0, QColor(0, 0, 0, 0 if glass else 255))
-            c = QColor(self.accent)
+            c = QColor(self._accent_color())
             c.setAlpha(170 if glass else 255)
             g.setColorAt(1, c)
             p.fillPath(path, QBrush(g))
@@ -2527,42 +2688,6 @@ class Notch(QWidget):
             self.click_open = True
         super().mousePressEvent(e)
 
-    def tr(self, text):
-        return LANGUAGE_TEXT.get(self.cfg.get("language", "de"), {}).get(text, text)
-
-    def set_language(self, lang):
-        if lang not in ("de", "en", "es", "fr"):
-            return
-        self.cfg["language"] = lang
-        save_config(self.cfg)
-        self._translate_ui()
-
-    def _translate_ui(self):
-        # Refresh changing page content first, then translate the resulting widgets.
-        for refresh_name in ("_refresh_tasks", "_refresh_shelf", "_refresh_pomo", "_refresh_water"):
-            refresh = getattr(self, refresh_name, None)
-            if callable(refresh):
-                try:
-                    refresh()
-                except Exception:
-                    pass
-        mapping = LANGUAGE_TEXT.get(self.cfg.get("language", "de"), {})
-        for widget in self.findChildren(QWidget):
-            if isinstance(widget, (QLabel, QPushButton, QCheckBox)):
-                original = widget.property("_notch_original_text")
-                if original is None:
-                    original = widget.text()
-                    widget.setProperty("_notch_original_text", original)
-                widget.setText(mapping.get(str(original), str(original)))
-        if hasattr(self, "cat_list"):
-            for i in range(self.cat_list.count()):
-                item = self.cat_list.item(i)
-                original = item.data(Qt.UserRole)
-                if original is None:
-                    original = item.text()
-                    item.setData(Qt.UserRole, original)
-                item.setText(mapping.get(str(original), str(original)))
-
     def _fill_panes(self):
         P = [Pane(self, w) for w in self.panes]
         self.pane_helpers = P
@@ -2570,7 +2695,6 @@ class Notch(QWidget):
 
         # 0 Allgemein
         p = P[0]
-        p.language_selector()
         p.toggle(("autostart",), "Mit Windows starten", getter=autostart_enabled)
         p.segmented(("size",), "Größe (Neustart nötig)",
                     (("auto", "Auto"), ("100", "100 %"), ("115", "115 %"), ("130", "130 %"), ("150", "150 %")),
@@ -2629,7 +2753,8 @@ class Notch(QWidget):
         p.toggle(("pages_today",), "Heute (Woche & Aufgaben)")
         p.toggle(("pages_pomo",), "Pomodoro")
         p.toggle(("pages_water",), "Wasser")
-        p.note("Mit den Pfeilen links und rechts an der aufgeklappten Notch wechselst du zwischen den Seiten.")
+        p.toggle(("wheel_nav",), "Mit dem Mausrad zwischen den Seiten wechseln")
+        p.note("Mit den Pfeilen links und rechts an der aufgeklappten Notch oder mit dem Mausrad wechselst du zwischen den Seiten.")
 
         # 5 HUD & Töne
         p = P[5]
@@ -2700,7 +2825,7 @@ class Notch(QWidget):
     def _refresh_pomo(self):
         pm = self.pomo
         sessions, minutes = focus_stats(self.cfg)
-        self.po_mode.setText(self.tr(POMO_NAMES[pm.mode]))
+        self.po_mode.setText(POMO_NAMES[pm.mode])
         self.po_time.setText(fmt_time(pm.remaining()))
         self.po_info.setText("Heute: %d Runde%s · %d min Fokus" % (sessions, "" if sessions == 1 else "n", minutes))
         self.po_ring.value = pm.progress()
@@ -2743,13 +2868,13 @@ class Notch(QWidget):
 
     def _water_remind(self):
         play_sound(self.cfg)
-        self.show_hud("droplet", self.tr("Zeit zu trinken"), None, 4.0)
+        self.show_hud("droplet", "Zeit zu trinken", None, 4.0)
 
     def hud_active(self):
         return self.hud is not None and time.time() < self.hud["until"]
 
     def show_hud(self, icon, text, value=None, secs=1.8):
-        self.hud = dict(icon=icon, text=self.tr(text), value=value, until=time.time() + secs)
+        self.hud = dict(icon=icon, text=text, value=value, until=time.time() + secs)
         if self.csize.go(*self._coll_target()):
             self._kick()
         self.update()
@@ -2765,6 +2890,8 @@ class Notch(QWidget):
                 else:
                     self.show_hud("speaker", "Lautstärke", cur[0], 1.4)
             last["vol"] = cur
+        elif cget(self.cfg, "hud", "volume"):
+            self._poll_volume_keys()
         if cget(self.cfg, "hud", "caps"):
             cur = caps_on()
             if last["caps"] is not None and cur != last["caps"]:
@@ -2832,15 +2959,54 @@ class Notch(QWidget):
         else:
             p.drawText(QRectF(40, 0, w - 56, h), Qt.AlignVCenter | Qt.AlignLeft, elide(hud["text"], f, w - 60))
 
+    def _accent_color(self):
+        """Farbe des unteren Verlaufs: Cover bei Musik, im Gesichts-Modus die Farbe des Maskottchens."""
+        if self.state["has_session"] and self.state.get("cover"):
+            return self.accent
+        if cget(self.cfg, "idle") == "face":
+            c = QColor(str(cget(self.cfg, "mascot", "body")))
+            h, s, v, _ = c.getHsv()
+            if h < 0:
+                return QColor(50, 55, 70)
+            return QColor.fromHsv(h, min(255, int(s * 1.1) + 10), clamp(v, 80, 170))
+        return self.accent
+
+    def wheelEvent(self, e):
+        navs = self.nav_pages()
+        if (cget(self.cfg, "wheel_nav") and self.t > 0.7 and self.page in navs and len(navs) > 1):
+            now = time.time()
+            if now - self._wheel_t > 0.3:
+                self._wheel_t = now
+                self._nav(-1 if e.angleDelta().y() > 0 else 1)
+            e.accept()
+        else:
+            e.ignore()
+
+    def _poll_volume_keys(self):
+        """Ersatz ohne pycaw: reagiert auf die Lautstärke-Tasten (zeigt Lauter, Leiser, Stumm)."""
+        try:
+            def down(vk):
+                return bool(user32.GetAsyncKeyState(vk) & 0x8000)
+            if down(0xAF):
+                self.show_hud("speaker", "Lauter", None, 1.0)
+            elif down(0xAE):
+                self.show_hud("speaker", "Leiser", None, 1.0)
+            elif down(0xAD):
+                self.show_hud("mute", "Stumm / Ton an", None, 1.0)
+        except Exception:
+            pass
+
 
 # ---------------------------------------------------------------- Start
 def main():
+    install_crash_log()
     cfg = load_config()
     size = str(cget(cfg, "size"))
     if size.isdigit():
         os.environ["QT_SCALE_FACTOR"] = str(int(size) / 100.0)
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
+    app.setWindowIcon(make_tray_icon())
     if cget(cfg, "shelf_empty_start"):
         cfg["shelf"] = []
     volume = Volume()
@@ -2856,11 +3022,15 @@ def main():
     tray = QSystemTrayIcon(make_tray_icon(), app)
     menu = QMenu()
     menu.addAction("Einstellungen").triggered.connect(notch.open_settings)
+    menu.addAction("Fehlerprotokoll öffnen").triggered.connect(open_log)
     menu.addAction("Beenden").triggered.connect(app.quit)
     tray.setContextMenu(menu)
     tray.setToolTip(APP_NAME)
     tray.show()
-    worker.error.connect(lambda m: tray.showMessage(APP_NAME, m))
+    worker.error.connect(lambda m: (log_line(m), tray.showMessage(APP_NAME, m)))
+    if cget(cfg, "hud", "volume") and not volume.available():
+        tray.showMessage(APP_NAME, "pycaw nicht verfügbar: Die Lautstärke-Anzeige reagiert nur auf die "
+                                   "Lautstärke-Tasten. Details im Fehlerprotokoll (Tray-Menü).")
 
     notch.show()
     worker.start()
